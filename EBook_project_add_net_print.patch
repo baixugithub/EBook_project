@@ -1,0 +1,859 @@
+diff -urN EBook_project/debug/debug_manager.c EBookProjectNetPrint/debug/debug_manager.c
+--- EBook_project/debug/debug_manager.c	1970-01-01 07:00:00.000000000 +0700
++++ EBookProjectNetPrint/debug/debug_manager.c	2019-07-24 16:19:08.660983910 +0800
+@@ -0,0 +1,179 @@
++#include <config.h>
++#include <debug_manager.h>
++#include <string.h>
++#include <stdio.h>
++#include <stdarg.h>
++
++static PT_DebugOpr g_ptDebugOprHead;
++static int g_iDbgLevelLimit = 8;
++
++int RegisterDebugOpr(PT_DebugOpr ptDebugOpr)
++{
++	PT_DebugOpr ptTmp;
++
++
++	if (!g_ptDebugOprHead)
++	{
++		g_ptDebugOprHead   = ptDebugOpr;
++		ptDebugOpr->ptNext = NULL;
++	}
++	else
++	{
++		ptTmp = g_ptDebugOprHead;
++		while (ptTmp->ptNext)
++		{
++			ptTmp = ptTmp->ptNext;
++		}
++		ptTmp->ptNext	  = ptDebugOpr;
++		ptDebugOpr->ptNext = NULL;
++	}
++
++	return 0;
++}
++
++
++void ShowDebugOpr(void)
++{
++	int i = 0;
++	PT_DebugOpr ptTmp = g_ptDebugOprHead;
++
++	while (ptTmp)
++	{
++		printf("%02d %s\n", i++, ptTmp->name);
++		ptTmp = ptTmp->ptNext;
++	}
++}
++
++PT_DebugOpr GetDebugOpr(char *pcName)
++{
++	PT_DebugOpr ptTmp = g_ptDebugOprHead;
++	
++	while (ptTmp)
++	{
++		if (strcmp(ptTmp->name, pcName) == 0)
++		{
++			return ptTmp;
++		}
++		ptTmp = ptTmp->ptNext;
++	}
++	return NULL;
++}
++
++
++/* strBuf = "dbglevel=6" */
++int SetDbgLevel(char *strBuf)
++{
++	g_iDbgLevelLimit = strBuf[9] - '0';
++	return 0;
++}
++
++/*
++ * stdout=0			   : 关闭stdout打印
++ * stdout=1			   : 打开stdout打印
++ * netprint=0		   : 关闭netprint打印
++ * netprint=1		   : 打开netprint打印
++ */
++
++int SetDbgChanel(char *strBuf)
++{
++	char *pStrTmp;
++	char strName[100];
++	PT_DebugOpr ptTmp;
++
++	pStrTmp = strchr(strBuf, '=');
++	if (!pStrTmp)
++	{
++		return -1;
++	}
++	else
++	{
++		strncpy(strName, strBuf, pStrTmp-strBuf);
++		strName[pStrTmp-strBuf] = '\0';
++		ptTmp = GetDebugOpr(strName);
++		if (!ptTmp)
++			return -1;
++
++		if (pStrTmp[1] == '0')
++			ptTmp->isCanUse = 0;
++		else
++			ptTmp->isCanUse = 1;
++		return 0;
++	}
++	
++}
++
++
++int DebugPrint(const char *pcFormat, ...)
++{
++	char strTmpBuf[1000];
++	char *pcTmp;
++	va_list tArg;
++	int iNum;
++	PT_DebugOpr ptTmp = g_ptDebugOprHead;
++	int dbglevel = DEFAULT_DBGLEVEL;
++	
++	va_start (tArg, pcFormat);
++	iNum = vsprintf (strTmpBuf, pcFormat, tArg);
++	va_end (tArg);
++	strTmpBuf[iNum] = '\0';
++
++
++	pcTmp = strTmpBuf;
++	
++	/* 根据打印级别决定是否打印 */
++	if ((strTmpBuf[0] == '<') && (strTmpBuf[2] == '>'))
++	{
++		dbglevel = strTmpBuf[1] - '0';
++		if (dbglevel >= 0 && dbglevel <= 9)
++		{
++			pcTmp = strTmpBuf + 3;
++		}
++		else
++		{
++			dbglevel = DEFAULT_DBGLEVEL;
++		}
++	}
++
++	if (dbglevel > g_iDbgLevelLimit)
++	{
++		return -1;
++	}
++
++	/* 调用链表中所有isCanUse为1的结构体的DebugPrint函数 */
++	while (ptTmp)
++	{
++		if (ptTmp->isCanUse)
++		{
++			ptTmp->DebugPrint(pcTmp);
++		}
++		ptTmp = ptTmp->ptNext;
++	}
++
++	return 0;
++	
++}
++
++int DebugInit(void)
++{
++	int iError;
++
++	iError = StdoutInit();
++	iError |= NetPrintInit();
++	return iError;
++}
++
++int InitDebugChanel(void)
++{
++	PT_DebugOpr ptTmp = g_ptDebugOprHead;
++	while (ptTmp)
++	{
++		if (ptTmp->isCanUse && ptTmp->DebugInit)
++		{
++			ptTmp->DebugInit();
++		}
++		ptTmp = ptTmp->ptNext;
++	}
++
++	return 0;}
++
++
+diff -urN EBook_project/debug/Makefile EBookProjectNetPrint/debug/Makefile
+--- EBook_project/debug/Makefile	1970-01-01 07:00:00.000000000 +0700
++++ EBookProjectNetPrint/debug/Makefile	2019-07-24 16:19:08.685000657 +0800
+@@ -0,0 +1,3 @@
++obj-y += debug_manager.o
++obj-y += stdout.o
++obj-y += netprint.o
+diff -urN EBook_project/debug/netprint.c EBookProjectNetPrint/debug/netprint.c
+--- EBook_project/debug/netprint.c	1970-01-01 07:00:00.000000000 +0700
++++ EBookProjectNetPrint/debug/netprint.c	2019-07-24 16:19:08.709063863 +0800
+@@ -0,0 +1,234 @@
++#include <config.h>
++#include <debug_manager.h>
++#include <sys/types.h>          /* See NOTES */
++#include <sys/socket.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <unistd.h>
++#include <stdio.h>
++#include <signal.h>
++#include <stdlib.h>
++#include <pthread.h>
++
++#define SERVER_PORT 5678
++#define PRINT_BUF_SIZE   (16*1024)
++
++static int g_iSocketServer;
++static struct sockaddr_in g_tSocketServerAddr;
++static struct sockaddr_in g_tSocketClientAddr;
++static int g_iHaveConnected = 0;
++static char *g_pcNetPrintBuf;
++static int g_iReadPos  = 0;
++static int g_iWritePos = 0;
++
++static pthread_t g_tSendTreadID;
++static pthread_t g_tRecvTreadID;
++
++static pthread_mutex_t g_tNetDbgSendMutex  = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t  g_tNetDbgSendConVar = PTHREAD_COND_INITIALIZER;
++
++static int isFull(void)
++{
++	return (((g_iWritePos + 1) % PRINT_BUF_SIZE) == g_iReadPos);
++}
++
++static int isEmpty(void)
++{
++	return (g_iWritePos == g_iReadPos);
++}
++
++
++static int PutData(char cVal)
++{
++	if (isFull())
++		return -1;
++	else
++	{
++		g_pcNetPrintBuf[g_iWritePos] = cVal;
++		g_iWritePos = (g_iWritePos + 1) % PRINT_BUF_SIZE;
++		return 0;
++	}	
++}
++
++static int GetData(char *pcVal)
++{
++	if (isEmpty())
++		return -1;
++	else
++	{
++		*pcVal = g_pcNetPrintBuf[g_iReadPos];
++		g_iReadPos = (g_iReadPos + 1) % PRINT_BUF_SIZE;
++		return 0;
++	}
++}
++
++
++static void *NetDbgSendTreadFunction(void *pVoid)
++{
++	char strTmpBuf[512];
++	char cVal;
++	int i;
++	int iAddrLen;
++	int iSendLen;
++	
++	while (1)
++	{
++		/* 平时休眠 */
++		pthread_mutex_lock(&g_tNetDbgSendMutex);
++		pthread_cond_wait(&g_tNetDbgSendConVar, &g_tNetDbgSendMutex);	
++		pthread_mutex_unlock(&g_tNetDbgSendMutex);
++
++		while (g_iHaveConnected && !isEmpty())
++		{
++			i = 0;
++
++			/* 把环形缓冲区的数据取出来, 最多取512字节 */
++			while ((i < 512) && (0 == GetData(&cVal)))
++			{
++				strTmpBuf[i] = cVal;
++				i++;
++			}
++			
++			/* 执行到这里, 表示被唤醒 */
++			/* 用sendto函数发送打印信息给客户端 */
++			iAddrLen = sizeof(struct sockaddr);
++			iSendLen = sendto(g_iSocketServer, strTmpBuf, i, 0,
++			                      (const struct sockaddr *)&g_tSocketClientAddr, iAddrLen);
++
++		}
++
++	}
++	return NULL;
++}
++
++static void *NetDbgRecvTreadFunction(void *pVoid)
++{
++	socklen_t iAddrLen;
++	int iRecvLen;
++	char ucRecvBuf[1000];
++	struct sockaddr_in tSocketClientAddr;
++
++	while (1)
++	{
++		iAddrLen = sizeof(struct sockaddr);
++		DBG_PRINTF("in NetDbgRecvTreadFunction\n");
++		iRecvLen = recvfrom(g_iSocketServer, ucRecvBuf, 999, 0, (struct sockaddr *)&tSocketClientAddr, &iAddrLen);
++		
++		if (iRecvLen > 0)	
++		{
++			ucRecvBuf[iRecvLen] = '\0';
++			DBG_PRINTF("netprint.c get msg: %s\n", ucRecvBuf);
++			
++			/* 解析数据:
++			 * setclient            : 设置接收打印信息的客户端
++			 * dbglevel=0,1,2...    : 修改打印级别
++			 * stdout=0             : 关闭stdout打印
++			 * stdout=1             : 打开stdout打印
++			 * netprint=0           : 关闭netprint打印
++			 * netprint=1           : 打开netprint打印
++			 */
++			if (strcmp(ucRecvBuf, "setclient")  == 0)
++			{
++				g_tSocketClientAddr = tSocketClientAddr;
++				g_iHaveConnected = 1;
++			}
++			else if (strncmp(ucRecvBuf, "dbglevel=", 9) == 0)
++			{
++				SetDbgLevel(ucRecvBuf);
++			}
++			else
++			{
++				SetDbgChanel(ucRecvBuf);
++			}
++		}
++		
++	}
++	return NULL;
++}
++
++
++static int NetDbgInit(void)
++{
++	/* socket初始化 *///网络编程的初始化
++	int iRet;
++	
++	g_iSocketServer = socket(AF_INET, SOCK_DGRAM, 0);
++	if (-1 == g_iSocketServer)
++	{
++		printf("socket error!\n");
++		return -1;
++	}
++
++	g_tSocketServerAddr.sin_family      = AF_INET;
++	g_tSocketServerAddr.sin_port        = htons(SERVER_PORT);  /* host to net, short */
++ 	g_tSocketServerAddr.sin_addr.s_addr = INADDR_ANY;
++	memset(g_tSocketServerAddr.sin_zero, 0, 8);
++	
++	iRet = bind(g_iSocketServer, (const struct sockaddr *)&g_tSocketServerAddr, sizeof(struct sockaddr));
++	if (-1 == iRet)
++	{
++		printf("bind error!\n");
++		return -1;
++	}
++
++	g_pcNetPrintBuf = malloc(PRINT_BUF_SIZE);
++	if (NULL == g_pcNetPrintBuf)
++	{
++		close(g_iSocketServer);
++		return -1;
++	}
++
++
++	/* 创建netprint发送线程: 它用来发送打印信息给客户端 */
++	pthread_create(&g_tSendTreadID, NULL, NetDbgSendTreadFunction, NULL);			
++	
++	/* 创建netprint接收线程: 用来接收控制信息,比如修改打印级别,打开/关闭打印 */
++	pthread_create(&g_tRecvTreadID, NULL, NetDbgRecvTreadFunction, NULL);			
++
++	return 0;	
++}
++
++static int NetDbgExit(void)
++{
++	/* 关闭socket,... */
++	close(g_iSocketServer);
++	free(g_pcNetPrintBuf);
++}
++
++static int NetDbgPrint(char *strData)
++{
++	/* 把数据放入环形缓冲区 */
++	int i;
++	
++	for (i = 0; i < strlen(strData); i++)
++	{
++		if (0 != PutData(strData[i]))
++			break;
++	}
++	
++	/* 如果已经有客户端连接了, 就把数据通过网络发送给客户端 */
++	/* 唤醒netprint的发送线程 */
++	pthread_mutex_lock(&g_tNetDbgSendMutex);
++	pthread_c ond_signal(&g_tNetDbgSendConVar);//唤醒
++	pthread_mutex_unlock(&g_tNetDbgSendMutex);
++
++	return i;
++	
++}
++
++
++static T_DebugOpr g_tNetDbgOpr = {
++	.name       = "netprint",
++	.isCanUse   = 1,
++	.DebugInit  = NetDbgInit,
++	.DebugExit  = NetDbgExit,
++	.DebugPrint = NetDbgPrint,
++};
++
++int NetPrintInit(void)
++{
++	return RegisterDebugOpr(&g_tNetDbgOpr);
++}
++
+diff -urN EBook_project/debug/stdout.c EBookProjectNetPrint/debug/stdout.c
+--- EBook_project/debug/stdout.c	1970-01-01 07:00:00.000000000 +0700
++++ EBookProjectNetPrint/debug/stdout.c	2019-07-24 16:19:08.949143425 +0800
+@@ -0,0 +1,25 @@
++
++#include <config.h>
++#include <debug_manager.h>
++#include <stdio.h>
++#include <string.h>
++
++
++static int StdoutDebugPrint(char *strData)
++{
++	/* 直接把输出信息用printf打印出来 */
++	printf("%s", strData);
++	return strlen(strData);	
++}
++
++static T_DebugOpr g_tStdoutDbgOpr = {
++	.name       = "stdout",
++	.isCanUse   = 1,
++	.DebugPrint = StdoutDebugPrint,
++};
++
++int StdoutInit(void)
++{
++	return RegisterDebugOpr(&g_tStdoutDbgOpr);
++}
++
+diff -urN EBook_project/include/config.h EBookProjectNetPrint/include/config.h
+--- EBook_project/include/config.h	2019-07-24 16:15:10.592996348 +0800
++++ EBookProjectNetPrint/include/config.h	2019-07-24 16:19:09.033017185 +0800
+@@ -3,13 +3,14 @@
+ #define _CONFIG_H
+ 
+ #include <stdio.h>
++#include <debug_manager.h>
+ 
+ #define FB_DEVICE_NAME "/dev/fb0"
+ 
+ #define COLOR_BACKGROUND   0xE7DBB5  /* 泛黄的纸 */
+ #define COLOR_FOREGROUND   0x514438  /* 褐色字体 */
+ 
+-#define DBG_PRINTF(...)  
+-//#define DBG_PRINTF printf
++//#define DBG_PRINTF(...)  
++#define DBG_PRINTF DebugPrint
+ 
+ #endif /* _CONFIG_H */
+diff -urN EBook_project/include/debug_manager.h EBookProjectNetPrint/include/debug_manager.h
+--- EBook_project/include/debug_manager.h	1970-01-01 07:00:00.000000000 +0700
++++ EBookProjectNetPrint/include/debug_manager.h	2019-07-24 16:19:09.053033353 +0800
+@@ -0,0 +1,35 @@
++
++#ifndef _DEBUG_MANAGER_H
++#define _DEBUG_MANAGER_H//这个宏是为了避免头文件的包含
++
++#define	APP_EMERG	"<0>"	/* system is unusable			*/
++#define	APP_ALERT	"<1>"	/* action must be taken immediately	*/
++#define	APP_CRIT	"<2>"	/* critical conditions			*/
++#define	APP_ERR	    "<3>"	/* error conditions			*/
++#define	APP_WARNING	"<4>"	/* warning conditions			*/
++#define	APP_NOTICE	"<5>"	/* normal but significant condition	*/
++#define	APP_INFO	"<6>"	/* informational			*/
++#define	APP_DEBUG	"<7>"	/* debug-level messages			*/
++
++#define DEFAULT_DBGLEVEL  4
++
++typedef struct DebugOpr {
++	char *name;
++	int isCanUse;
++	int (*DebugInit)(void);
++	int (*DebugExit)(void);
++	int (*DebugPrint)(char *strData);
++	struct DebugOpr *ptNext;
++}T_DebugOpr, *PT_DebugOpr;
++
++int RegisterDebugOpr(PT_DebugOpr ptDebugOpr);
++void ShowDebugOpr(void);
++PT_DebugOpr GetDebugOpr(char *pcName);
++int SetDbgLevel(char *strBuf);
++int SetDbgChanel(char *strBuf);
++int DebugInit(void);
++int DebugPrint(const char *pcFormat, ...);
++int InitDebugChanel(void);
++
++#endif /* _DEBUG_MANAGER_H */
++  
+diff -urN EBook_project/input/touchscreen.c EBookProjectNetPrint/input/touchscreen.c
+--- EBook_project/input/touchscreen.c	2019-07-24 16:15:11.085812440 +0800
++++ EBookProjectNetPrint/input/touchscreen.c	2019-07-24 16:19:09.309103579 +0800
+@@ -26,7 +26,7 @@
+ 	}
+ 
+ 	if (!g_tTSDev) {
+-		DBG_PRINTF("ts_open error!\n");
++		DBG_PRINTF(APP_ERR"ts_open error!\n");
+ 		return -1;
+ 	}
+ 
+@@ -67,29 +67,31 @@
+ 	struct ts_sample tSampReleased;
+ 	int iRet;
+ 	int bStart = 0;
+-	int iDelta; /* 位置偏移量 */
++	int iDelta;
+ 
+ 	static struct timeval tPreTime;
+ 	
+ 
+ 	while (1)
+ 	{
+-		iRet = ts_read(g_tTSDev, &tSamp, 1); /* 如果无数据则休眠，读到1个数据 */
+-		if (iRet == 1)/* 等于1，说明数据读成功了 */
++		iRet = ts_read(g_tTSDev, &tSamp, 1); /* 如果无数据则休眠 */
++		if (iRet == 1)
+ 		{
+ 			if ((tSamp.pressure > 0) && (bStart == 0))
+ 			{
+-				/* 刚按下,记录刚开始压下的点 */
++				/* 刚按下 */
++				/* 记录刚开始压下的点 */
+ 				tSampPressed = tSamp;
+ 				bStart = 1;
+-			}			
++			}
++			
+ 			if (tSamp.pressure <= 0)
+ 			{
+-				/* 松开：记录点 */
++				/* 松开 */
+ 				tSampReleased = tSamp;
+ 
+ 				/* 处理数据 */
+-				if (!bStart)/* 如果之前没按下，这里会出错 */
++				if (!bStart)
+ 				{
+ 					return -1;
+ 				}
+@@ -99,12 +101,12 @@
+ 					ptInputEvent->tTime = tSampReleased.tv;
+ 					ptInputEvent->iType = INPUT_TYPE_TOUCHSCREEN;
+ 					
+-					if (iDelta > giXres/5)/* left??>right */
++					if (iDelta > giXres/5)
+ 					{
+ 						/* 翻到上一页 */
+ 						ptInputEvent->iVal = INPUT_VALUE_UP;
+ 					}
+-					else if (iDelta < 0 - giXres/5)/* right??>left */
++					else if (iDelta < 0 - giXres/5)
+ 					{
+ 						/* 翻到下一页 */
+ 						ptInputEvent->iVal = INPUT_VALUE_DOWN;
+@@ -113,7 +115,7 @@
+ 					{
+ 						ptInputEvent->iVal = INPUT_VALUE_UNKNOWN;
+ 					}
+-					return 0; /* 处理完后返回 */
++					return 0;
+ 				}
+ 			}
+ 		}
+diff -urN EBook_project/log.txt EBookProjectNetPrint/log.txt
+--- EBook_project/log.txt	2019-07-24 16:15:11.105388219 +0800
++++ EBookProjectNetPrint/log.txt	2019-07-24 16:33:41.781919234 +0800
+@@ -27,6 +27,11 @@
+ |   |-- stdin.c
+ |   |-- touchscreen.c
+ |   `-- Makefile
++|-- debug
++|   |-- stdout.c
++|   |-- netprint.c
++|   |-- debug_manager.c
++|   `-- Makefile
+ |-- include
+ |   |-- config.h
+ |   |-- disp_manager.h
+@@ -35,7 +40,8 @@
+ |   |-- input_manager.h
+ |   `-- fonts_manager.h
+ |-- log.txt
++|-- netprint_client.c
+ |-- main.c
+ `-- Makefile
+ 
+-7 directories, 31 files
++8 directories, 36 files
+diff -urN EBook_project/main.c EBookProjectNetPrint/main.c
+--- EBook_project/main.c	2019-07-24 16:15:11.404995037 +0800
++++ EBookProjectNetPrint/main.c	2019-07-24 16:19:09.681320689 +0800
+@@ -30,6 +30,15 @@
+ 	acTextFile[0] = '\0';
+ 
+ 	strcpy(acDisplay, "fb");
++
++	iError = DebugInit();
++	if (iError)
++	{
++		DBG_PRINTF("DebugInit error!\n");
++		return -1;
++	}
++
++	InitDebugChanel();
+ 	
+ 	while ((iError = getopt(argc, argv, "ls:f:h:d:")) != -1)
+ 	{
+@@ -65,8 +74,8 @@
+ 			}
+ 			default:
+ 			{
+-					printf("Usage: %s [-s Size] [-d display] [-f font_file] [-h HZK] <text_file>\n", argv[0]);
+-					printf("Usage: %s -l\n", argv[0]);
++					DBG_PRINTF("Usage: %s [-s Size] [-d display] [-f font_file] [-h HZK] <text_file>\n", argv[0]);
++					DBG_PRINTF("Usage: %s -l\n", argv[0]);
+ 					return -1;
+ 					break;
+ 			}
+@@ -75,29 +84,29 @@
+ 
+ 	if (!bList && (optind >= argc))
+ 	{
+-		printf("Usage: %s [-s Size] [-d display] [-f font_file] [-h HZK] <text_file>\n", argv[0]);
+-		printf("Usage: %s -l\n", argv[0]);
++		DBG_PRINTF("Usage: %s [-s Size] [-d display] [-f font_file] [-h HZK] <text_file>\n", argv[0]);
++		DBG_PRINTF("Usage: %s -l\n", argv[0]);
+ 		return -1;
+ 	}
+ 		
+ 	iError = DisplayInit();
+ 	if (iError)
+ 	{
+-		printf("DisplayInit error!\n");
++		DBG_PRINTF("DisplayInit error!\n");
+ 		return -1;
+ 	}
+ 
+ 	iError = FontsInit();
+ 	if (iError)
+ 	{
+-		printf("FontsInit error!\n");
++		DBG_PRINTF("FontsInit error!\n");
+ 		return -1;
+ 	}
+ 
+ 	iError = EncodingInit();
+ 	if (iError)
+ 	{
+-		printf("EncodingInit error!\n");
++		DBG_PRINTF("EncodingInit error!\n");
+ 		return -1;
+ 	}
+ 
+@@ -105,24 +114,28 @@
+ 	iError = InputInit();
+ 	if (iError)
+ 	{
+-		printf("InputInit error!\n");
++		DBG_PRINTF("InputInit error!\n");
+ 		return -1;
+ 	}
+ 
+ 
++
+ 	if (bList)
+ 	{
+-		printf("supported display:\n");
++		DBG_PRINTF("supported display:\n");
+ 		ShowDispOpr();
+ 
+-		printf("supported font:\n");
++		DBG_PRINTF("supported font:\n");
+ 		ShowFontOpr();
+ 
+-		printf("supported encoding:\n");
++		DBG_PRINTF("supported encoding:\n");
+ 		ShowEncodingOpr();
+ 
+-		printf("supported input:\n");
++		DBG_PRINTF("supported input:\n");
+ 		ShowInputOpr();
++
++		DBG_PRINTF("supported debug chanel:\n");
++		ShowDebugOpr();
+ 		
+ 		return 0;
+ 	}
+@@ -133,14 +146,14 @@
+ 	iError = OpenTextFile(acTextFile);
+ 	if (iError)
+ 	{
+-		printf("OpenTextFile error!\n");
++		DBG_PRINTF("OpenTextFile error!\n");
+ 		return -1;
+ 	}
+ 
+ 	iError = SetTextDetail(acHzkFile, acFreetypeFile, dwFontSize);
+ 	if (iError)
+ 	{
+-		printf("SetTextDetail error!\n");
++		DBG_PRINTF("SetTextDetail error!\n");
+ 		return -1;
+ 	}
+ 
+@@ -149,7 +162,7 @@
+ 	iError = SelectAndInitDisplay(acDisplay);
+ 	if (iError)
+ 	{
+-		printf("SelectAndInitDisplay error!\n");
++		DBG_PRINTF("SelectAndInitDisplay error!\n");
+ 		return -1;
+ 	}
+ 
+@@ -165,11 +178,11 @@
+ 	DBG_PRINTF("%s %s %d\n", __FILE__, __FUNCTION__, __LINE__);
+ 	if (iError)
+ 	{
+-		printf("Error to show first page\n");
++		DBG_PRINTF("Error to show first page\n");
+ 		return -1;
+ 	}
+ 
+-	printf("Enter 'n' to show next page, 'u' to show previous page, 'q' to exit: ");
++	DBG_PRINTF("Enter 'n' to show next page, 'u' to show previous page, 'q' to exit: ");
+ 
+ 	while (1)
+ 	{
+diff -urN EBook_project/Makefile EBookProjectNetPrint/Makefile
+--- EBook_project/Makefile	2019-07-24 16:15:11.148987696 +0800
++++ EBookProjectNetPrint/Makefile	2019-07-24 16:19:09.344975707 +0800
+@@ -33,6 +33,7 @@
+ obj-y += encoding/
+ obj-y += fonts/
+ obj-y += input/
++obj-y += debug/
+ 
+ all : 
+ 	make -C ./ -f $(TOPDIR)/Makefile.build
+diff -urN EBook_project/netprint_client.c EBookProjectNetPrint/netprint_client.c
+--- EBook_project/netprint_client.c	1970-01-01 07:00:00.000000000 +0700
++++ EBookProjectNetPrint/netprint_client.c	2019-07-24 16:19:09.405217368 +0800
+@@ -0,0 +1,89 @@
++
++#include <sys/types.h>          /* See NOTES */
++#include <sys/socket.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <unistd.h>
++#include <stdio.h>
++
++/* socket
++ * connect
++ * send/recv
++ */
++
++#define SERVER_PORT 5678
++
++
++/*
++ * ./netprint_client <server_ip> dbglevel=<0-9>
++ * ./netprint_client <server_ip> stdout=0|1
++ * ./netprint_client <server_ip> netprint=0|1
++ * ./netprint_client <server_ip> show // setclient,并且接收打印信息
++ */
++
++int main(int argc, char **argv)
++{
++	int iSocketClient;
++	struct sockaddr_in tSocketServerAddr;
++	
++	int iRet;
++	unsigned char ucRecvBuf[1000];
++	int iSendLen;
++	int iRecvLen;
++	int iAddrLen;
++
++	if (argc != 3)
++	{
++		printf("Usage:\n");
++		printf("%s <server_ip> dbglevel=<0-9>\n", argv[0]);
++		printf("%s <server_ip> stdout=0|1\n", argv[0]);
++		printf("%s <server_ip> netprint=0|1\n", argv[0]);
++		printf("%s <server_ip> show\n", argv[0]);
++		return -1;
++	}
++
++	iSocketClient = socket(AF_INET, SOCK_DGRAM, 0);
++
++	tSocketServerAddr.sin_family      = AF_INET;
++	tSocketServerAddr.sin_port        = htons(SERVER_PORT);  /* host to net, short */
++ 	//tSocketServerAddr.sin_addr.s_addr = INADDR_ANY;
++ 	if (0 == inet_aton(argv[1], &tSocketServerAddr.sin_addr))
++ 	{
++		printf("invalid server_ip\n");
++		return -1;
++	}
++	memset(tSocketServerAddr.sin_zero, 0, 8);
++
++	if (strcmp(argv[2], "show") == 0)
++	{
++		/* 发送数据 */
++		iAddrLen = sizeof(struct sockaddr);
++		iSendLen = sendto(iSocketClient, "setclient", 9, 0,
++							  (const struct sockaddr *)&tSocketServerAddr, iAddrLen);
++
++		while (1)
++		{
++			/* 循环: 从网络读数据, 打印出来 */
++			iAddrLen = sizeof(struct sockaddr);
++			iRecvLen = recvfrom(iSocketClient, ucRecvBuf, 999, 0, (struct sockaddr *)&tSocketServerAddr, &iAddrLen);
++			if (iRecvLen > 0)
++			{
++				ucRecvBuf[iRecvLen] = '\0';
++				printf("%s\n", ucRecvBuf);
++			}
++		}
++	}
++	else
++	{
++		/* 发送数据 */
++		iAddrLen = sizeof(struct sockaddr);
++		iSendLen = sendto(iSocketClient, argv[2], strlen(argv[2]), 0,
++							  (const struct sockaddr *)&tSocketServerAddr, iAddrLen);
++	}
++
++	return 0;
++}
++
++
