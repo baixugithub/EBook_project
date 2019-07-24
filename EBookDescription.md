@@ -9,11 +9,15 @@
 	1.根据系统总体设计的实际要求进行Linux系统裁剪定制；
 	2.编写软件开发流程图和系统开发相应的技术文档；
 	3.系统程序框架设计及驱动、应用程序的编写调试。
-## 三、软件环境：Ubuntu9.10、linux-3.4.2内核
-四、硬件环境：PC宿主机、S3C2440A处理器、LCD触摸屏
-五、开发工具：gcc、gdb调试工具、CuteFTP、SecureCRT、SourceInsight
-  六、关键技术：U-Boot移植、Linux内核移植、文件系统移植、多线程操作、文件操作、链表操作、
-				字符编码、矢量字体显示、FreeType2字库安装、tslib触摸屏库调用、SVGAlib图像库安装
+## 三、软件环境：
+	Ubuntu9.10、linux-3.4.2内核
+## 四、硬件环境：
+	PC宿主机、S3C2440A处理器、LCD触摸屏
+## 五、开发工具：
+	gcc、gdb调试工具、CuteFTP、SecureCRT、SourceInsight
+## 六、关键技术：
+	U-Boot移植、Linux内核移植、文件系统移植、多线程操作、文件操作、链表操作、
+	字符编码、矢量字体显示、FreeType2字库安装、tslib触摸屏库调用、SVGAlib图像库安装
 ## 七、测试步骤：
 ```
 	1. insmod  s3c_ts.ko
