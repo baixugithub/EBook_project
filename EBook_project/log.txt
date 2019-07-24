@@ -1,0 +1,41 @@
+./
+|-- display
+|   |-- disp_manager.c
+|   |-- fb.c
+|   |-- Makefile
+|   `-- test
+|       |-- Makefile
+|       `-- test.c
+|-- draw
+|   |-- draw.c
+|   `-- Makefile
+|-- encoding
+|   |-- ascii.c
+|   |-- encoding_manager.c
+|   |-- Makefile
+|   |-- utf-16be.c
+|   |-- utf-16le.c
+|   `-- utf-8.c
+|-- fonts
+|   |-- ascii.c
+|   |-- fonts_manager.c
+|   |-- freetype.c
+|   |-- gbk.c
+|   `-- Makefile
+|-- input
+|   |-- input_manager.c
+|   |-- stdin.c
+|   |-- touchscreen.c
+|   `-- Makefile
+|-- include
+|   |-- config.h
+|   |-- disp_manager.h
+|   |-- draw.h
+|   |-- encoding_manager.h
+|   |-- input_manager.h
+|   `-- fonts_manager.h
+|-- log.txt
+|-- main.c
+`-- Makefile
+
+7 directories, 31 files
